@@ -1210,10 +1210,47 @@ int libinjection_sqli_tokenize(struct libinjection_sqli_state * sf)
     const char *s = sf->s;
     const size_t slen = sf->slen;
 
+    if (*pos == 0) {
+        /*
+         * A new scan always starts in tokenvec[0].  Direct users of the
+         * streaming interface may reuse the state by replacing the
+         * input and rewinding pos, without calling
+         * libinjection_sqli_init, so sf->current may still point into
+         * the previous scan's output.
+         */
+        sf->current = &(sf->tokenvec[0]);
+
+        if (sf->lookup_scope_active == 0) {
+            /*
+             * Also drop the previous scan's callback result and any
+             * per-scan counters.  A callback which was already used is
+             * not carried into this scan; the built-in word table and
+             * whitelist take over again.
+             */
+            if (sf->lookup_scope_used || sf->lookup_scope_started) {
+                sf->lookup = libinjection_sqli_lookup_word;
+                sf->userdata = (void*)(NULL);
+                sf->lookup_scope_used = 0;
+            }
+            sf->lookup_scope_started = 1;
+
+            memset((void*)sf->tokenvec, 0, sizeof(sf->tokenvec));
+            memset((void*)sf->fingerprint, 0, sizeof(sf->fingerprint));
+            sf->reason = 0;
+            sf->stats_comment_ddw = 0;
+            sf->stats_comment_ddx = 0;
+            sf->stats_comment_c = 0;
+            sf->stats_comment_hash = 0;
+            sf->stats_folds = 0;
+            sf->stats_tokens = 0;
+        }
+    }
+
     if (slen == 0) {
         return FALSE;
     }
 
+    current = sf->current;
     st_clear(current);
     sf->current = current;
 
@@ -1253,6 +1290,11 @@ int libinjection_sqli_tokenize(struct libinjection_sqli_state * sf)
             return TRUE;
         }
     }
+
+    if (sf->lookup_scope_active == 0 && sf->lookup_scope_started) {
+        /* Completed direct tokenize scan: consume the callback. */
+        sf->lookup_scope_used = 1;
+    }
     return FALSE;
 }
 
@@ -1274,7 +1316,10 @@ void libinjection_sqli_init(struct libinjection_sqli_state * sf, const char *s, 
 void libinjection_sqli_reset(struct libinjection_sqli_state * sf, int flags)
 {
     void *userdata = sf->userdata;
-    ptr_lookup_fn lookup = sf->lookup;;
+    ptr_lookup_fn lookup = sf->lookup;
+    int lookup_scope_active = sf->lookup_scope_active;
+    int lookup_scope_used = sf->lookup_scope_used;
+    int lookup_scope_started = sf->lookup_scope_started;
 
     if (flags == 0) {
         flags = FLAG_QUOTE_NONE | FLAG_SQL_ANSI;
@@ -1282,10 +1327,51 @@ void libinjection_sqli_reset(struct libinjection_sqli_state * sf, int flags)
     libinjection_sqli_init(sf, sf->s, sf->slen, flags);
     sf->lookup = lookup;
     sf->userdata = userdata;
+    sf->lookup_scope_active = lookup_scope_active;
+    sf->lookup_scope_used = lookup_scope_used;
+    sf->lookup_scope_started = lookup_scope_started;
+}
+
+/*
+ * Start a top-level scan.  A callback can only be consumed once: if the
+ * previous scan already used it, fall back to the built-in word table
+ * and fingerprint whitelist before parsing the new input.
+ */
+static void sqli_lookup_scan_begin(struct libinjection_sqli_state * sf)
+{
+    if (sf->lookup_scope_used) {
+        sf->lookup = libinjection_sqli_lookup_word;
+        sf->userdata = (void*)(NULL);
+        sf->lookup_scope_used = 0;
+    }
+    sf->lookup_scope_started = 0;
+    sf->lookup_scope_active += 1;
+}
+
+/*
+ * Finish a top-level scan.  The callback registration belonged to this
+ * scan only, so leave the state ready to use the default word list and
+ * whitelist for the next input.
+ */
+static void sqli_lookup_scan_end(struct libinjection_sqli_state * sf)
+{
+    int outermost = (sf->lookup_scope_active == 1);
+
+    if (sf->lookup_scope_active > 0) {
+        sf->lookup_scope_active -= 1;
+    }
+    if (outermost) {
+        sf->lookup = libinjection_sqli_lookup_word;
+        sf->userdata = (void*)(NULL);
+        sf->lookup_scope_used = 0;
+        sf->lookup_scope_started = 0;
+    }
 }
 
 void libinjection_sqli_callback(struct libinjection_sqli_state * sf, ptr_lookup_fn fn, void* userdata)
 {
+    sf->lookup_scope_used = 0;
+    sf->lookup_scope_started = 0;
     if (fn == NULL) {
         sf->lookup = libinjection_sqli_lookup_word;
         sf->userdata = (void*)(NULL);
@@ -1368,7 +1454,7 @@ static int syntax_merge_words(struct libinjection_sqli_state * sf,stoken_t * a, 
     }
 }
 
-int libinjection_sqli_fold(struct libinjection_sqli_state * sf)
+static int sqli_fold_internal(struct libinjection_sqli_state * sf)
 {
     stoken_t last_comment;
 
@@ -1888,6 +1974,23 @@ int libinjection_sqli_fold(struct libinjection_sqli_state * sf)
     return (int)left;
 }
 
+int libinjection_sqli_fold(struct libinjection_sqli_state * sf)
+{
+    int folded;
+
+    sqli_lookup_scan_begin(sf);
+    /*
+     * Folding is a complete scan of the current input, not a
+     * continuation of a previous one.  Clear tokens and counters so a
+     * callback result from an earlier input cannot be folded into this
+     * result.
+     */
+    libinjection_sqli_reset(sf, sf->flags);
+    folded = sqli_fold_internal(sf);
+    sqli_lookup_scan_end(sf);
+    return folded;
+}
+
 /* secondary api: detects SQLi in a string, GIVEN a context.
  *
  * A context can be:
@@ -1898,14 +2001,14 @@ int libinjection_sqli_fold(struct libinjection_sqli_state * sf)
  *          double quote.
  *
  */
-const char* libinjection_sqli_fingerprint(struct libinjection_sqli_state * sql_state, int flags)
+static const char* sqli_fingerprint_internal(struct libinjection_sqli_state * sql_state, int flags)
 {
     int i;
     int tlen = 0;
 
     libinjection_sqli_reset(sql_state, flags);
 
-    tlen = libinjection_sqli_fold(sql_state);
+    tlen = sqli_fold_internal(sql_state);
 
     /* Check for magic PHP backquote comment
      * If:
@@ -1955,6 +2058,16 @@ const char* libinjection_sqli_fingerprint(struct libinjection_sqli_state * sql_s
 
 
     return sql_state->fingerprint;
+}
+
+const char* libinjection_sqli_fingerprint(struct libinjection_sqli_state * sql_state, int flags)
+{
+    const char* fingerprint;
+
+    sqli_lookup_scan_begin(sql_state);
+    fingerprint = sqli_fingerprint_internal(sql_state, flags);
+    sqli_lookup_scan_end(sql_state);
+    return fingerprint;
 }
 
 int libinjection_sqli_check_fingerprint(struct libinjection_sqli_state* sql_state)
@@ -2246,26 +2359,36 @@ int libinjection_is_sqli(struct libinjection_sqli_state * sql_state)
 {
     const char *s = sql_state->s;
     size_t slen = sql_state->slen;
+    int result = FALSE;
+
+    sqli_lookup_scan_begin(sql_state);
 
     /*
      * no input? not SQLi
      */
     if (slen == 0) {
-        return FALSE;
+        /*
+         * Clear any tokens, fingerprint or counters left by the
+         * previous scan so they are not visible as this scan's result.
+         */
+        libinjection_sqli_reset(sql_state, sql_state->flags);
+        goto done;
     }
 
     /*
      * test input "as-is"
      */
-    libinjection_sqli_fingerprint(sql_state, FLAG_QUOTE_NONE | FLAG_SQL_ANSI);
+    sqli_fingerprint_internal(sql_state, FLAG_QUOTE_NONE | FLAG_SQL_ANSI);
     if (sql_state->lookup(sql_state, LOOKUP_FINGERPRINT,
                           sql_state->fingerprint, strlen(sql_state->fingerprint))) {
-        return TRUE;
+        result = TRUE;
+        goto done;
     } else if (reparse_as_mysql(sql_state)) {
-        libinjection_sqli_fingerprint(sql_state, FLAG_QUOTE_NONE | FLAG_SQL_MYSQL);
+        sqli_fingerprint_internal(sql_state, FLAG_QUOTE_NONE | FLAG_SQL_MYSQL);
         if (sql_state->lookup(sql_state, LOOKUP_FINGERPRINT,
                               sql_state->fingerprint, strlen(sql_state->fingerprint))) {
-            return TRUE;
+            result = TRUE;
+            goto done;
         }
     }
 
@@ -2279,15 +2402,17 @@ int libinjection_is_sqli(struct libinjection_sqli_state * sql_state)
      *
      */
     if (memchr(s, CHAR_SINGLE, slen)) {
-        libinjection_sqli_fingerprint(sql_state, FLAG_QUOTE_SINGLE | FLAG_SQL_ANSI);
+        sqli_fingerprint_internal(sql_state, FLAG_QUOTE_SINGLE | FLAG_SQL_ANSI);
         if (sql_state->lookup(sql_state, LOOKUP_FINGERPRINT,
                               sql_state->fingerprint, strlen(sql_state->fingerprint))) {
-            return TRUE;
+            result = TRUE;
+            goto done;
         } else if (reparse_as_mysql(sql_state)) {
-            libinjection_sqli_fingerprint(sql_state, FLAG_QUOTE_SINGLE | FLAG_SQL_MYSQL);
+            sqli_fingerprint_internal(sql_state, FLAG_QUOTE_SINGLE | FLAG_SQL_MYSQL);
             if (sql_state->lookup(sql_state, LOOKUP_FINGERPRINT,
                                   sql_state->fingerprint, strlen(sql_state->fingerprint))) {
-                return TRUE;
+                result = TRUE;
+                goto done;
             }
         }
     }
@@ -2296,17 +2421,20 @@ int libinjection_is_sqli(struct libinjection_sqli_state * sql_state)
      * same as above but with a double-quote "
      */
     if (memchr(s, CHAR_DOUBLE, slen)) {
-        libinjection_sqli_fingerprint(sql_state, FLAG_QUOTE_DOUBLE | FLAG_SQL_MYSQL);
+        sqli_fingerprint_internal(sql_state, FLAG_QUOTE_DOUBLE | FLAG_SQL_MYSQL);
         if (sql_state->lookup(sql_state, LOOKUP_FINGERPRINT,
                               sql_state->fingerprint, strlen(sql_state->fingerprint))) {
-            return TRUE;
+            result = TRUE;
+            goto done;
         }
     }
 
     /*
      * Hurray, input is not SQLi
      */
-    return FALSE;
+done:
+    sqli_lookup_scan_end(sql_state);
+    return result;
 }
 
 int libinjection_sqli(const char* input, size_t slen, char fingerprint[])

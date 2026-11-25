@@ -170,6 +170,22 @@ struct libinjection_sqli_state {
      */
     int stats_tokens;
 
+    /*
+     * Lookup callback scope.
+     *
+     * A custom lookup callback is an input to one scan, not a result
+     * cache.  These fields make sure a callback which was used while
+     * scanning one input is not silently applied to a later input
+     * handled by the same, reused state.
+     *
+     * lookup_scope_active : a top-level scan is currently running
+     * lookup_scope_used   : a direct tokenize scan already used its callback
+     * lookup_scope_started: a direct tokenize scan has produced a token
+     */
+    int lookup_scope_active;
+    int lookup_scope_used;
+    int lookup_scope_started;
+
 };
 
 typedef struct libinjection_sqli_state sfilter;
@@ -208,7 +224,10 @@ void libinjection_sqli_init(struct libinjection_sqli_state* sql_state,
 int libinjection_is_sqli(struct libinjection_sqli_state* sql_state);
 
 /*  FOR HACKERS ONLY
- *   provides deep hooks into the decision making process
+ *   provides deep hooks into the decision making process.
+ *
+ *   The callback is scoped to the next scan.  Re-register it before
+ *   each scan if it should be used more than once.
  */
 void libinjection_sqli_callback(struct libinjection_sqli_state*  sql_state,
                                 ptr_lookup_fn fn,
@@ -216,7 +235,9 @@ void libinjection_sqli_callback(struct libinjection_sqli_state*  sql_state,
 
 
 /*
- * Resets state, but keeps initial string and callbacks
+ * Resets state, but keeps initial string and callbacks.  A custom
+ * callback remains armed for the next scan; it is not carried into a
+ * scan which has already completed.
  */
 void libinjection_sqli_reset(struct libinjection_sqli_state* sql_state,
                              int flags);
