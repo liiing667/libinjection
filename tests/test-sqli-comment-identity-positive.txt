@@ -1,0 +1,6 @@
+--TEST--
+Bind the end-of-line dash comment attack to its public fingerprint
+--INPUT--
+' OR 1=1 --
+--EXPECTED--
+s&1c

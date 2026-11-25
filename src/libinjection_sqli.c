@@ -1963,6 +1963,43 @@ int libinjection_sqli_check_fingerprint(struct libinjection_sqli_state* sql_stat
         libinjection_sqli_not_whitelist(sql_state);
 }
 
+/*
+ * A dash comment which only gains trailing whitespace before EOL is the
+ * same comment identity as one ending directly in "--".  The tokenizer
+ * preserves that whitespace, so callers must inspect past it rather than
+ * treating every extra byte as human-readable comment text.
+ */
+static int dash_comment_has_text(const struct libinjection_sqli_state* sf,
+                                 const stoken_t* token)
+{
+    size_t i;
+    size_t end;
+
+    if (token->type != TYPE_COMMENT || token->len < 2 ||
+        token->val[0] != '-' || token->val[1] != '-') {
+        return FALSE;
+    }
+
+    /*
+     * Token values are truncated to a fixed buffer.  Scan the original
+     * input through the end of the EOL comment so a long run of trailing
+     * whitespace cannot hide real comment text (or vice versa).
+     */
+    i = token->pos + 2;
+    end = i;
+    while (end < sf->slen && sf->s[end] != '\n') {
+        ++end;
+    }
+
+    while (i < end) {
+        if (!char_is_white(sf->s[i])) {
+            return TRUE;
+        }
+        ++i;
+    }
+    return FALSE;
+}
+
 char libinjection_sqli_lookup_word(struct libinjection_sqli_state *sql_state, int lookup_type,
                                    const char* str, size_t len)
 {
@@ -2148,9 +2185,11 @@ int libinjection_sqli_not_whitelist(struct libinjection_sqli_state* sql_state)
         /*
          * detect obvious SQLi scans.. many people put '--' in plain text
          * so only detect if input ends with '--', e.g. 1-- but not 1-- foo
+         *
+         * Trailing whitespace is not "foo": "--" and "--   " identify the
+         * same EOL comment and must reach the same public verdict.
          */
-        if ((sql_state->tokenvec[1].len > 2)
-            && sql_state->tokenvec[1].val[0] == '-') {
+        if (dash_comment_has_text(sql_state, &sql_state->tokenvec[1])) {
             sql_state->reason = __LINE__;
             return FALSE;
         }

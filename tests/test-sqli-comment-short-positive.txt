@@ -1,0 +1,6 @@
+--TEST--
+A quote followed by a complete dash comment has a stable public identity
+--INPUT--
+admin'--
+--EXPECTED--
+sc

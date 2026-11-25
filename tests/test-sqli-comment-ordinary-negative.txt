@@ -1,0 +1,6 @@
+--TEST--
+Ordinary prose after a dash comment marker remains undetected
+--INPUT--
+x'-- release notes for this build
+--EXPECTED--
+

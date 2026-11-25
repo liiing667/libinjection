@@ -30,7 +30,7 @@ OBJECTS=libinjection_sqli.o \
 	libinjection_xss.o
 
 SAMPLES=html5 sqli fptool
-TESTDRIVERS=reader testdriver testspeedxss testspeedsqli
+TESTDRIVERS=reader testdriver testspeedxss testspeedsqli testcommentidentity
 
 all: ${SHAREDLIB} ${STATICLIB}
 #all: ${STATICLIB}
@@ -47,7 +47,7 @@ fingerprints:
 	mv fingerprints2.txt fingerprints.txt
 .PHONY: fingerprints
 
-sqlparse_data.json: sqlparse_map.py fingerprints
+sqlparse_data.json: sqlparse_map.py fingerprints.txt
 	./sqlparse_map.py > sqlparse_data.json
 
 libinjection_sqli_data.h: sqlparse2c.py sqlparse_data.json
@@ -69,8 +69,10 @@ ${STATICLIB}: ${OBJECTS}
 	rm -f ${STATICLIB}
 	${AR} ${STATICLIB} ${OBJECTS}
 
-check: ${TESTDRIVERS}
+check: ${TESTDRIVERS} sqli
 	@./test-driver.sh test-unit.sh
+	@./testcommentidentity
+	@./test-driver.sh test-comment-policy.sh
 	@./test-driver.sh test-samples-sqli-negative.sh
 	@./test-driver.sh test-samples-sqli-positive.sh
 	@./test-driver.sh test-samples-xss-positive.sh
@@ -94,6 +96,9 @@ html5: html5_cli.c ${STATICLIB}
 
 testdriver: testdriver.c ${STATICLIB}
 	${CC} ${CFLAGS} -o testdriver testdriver.c -L. ${STATICLIB}
+
+testcommentidentity: test_comment_identity.c ${STATICLIB}
+	${CC} ${CFLAGS} -o testcommentidentity test_comment_identity.c -L. ${STATICLIB}
 
 testspeedsqli: test_speed_sqli.c ${STATICLIB}
 	${CC} ${CFLAGS} -o testspeedsqli test_speed_sqli.c -L. ${STATICLIB}
