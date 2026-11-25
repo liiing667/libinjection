@@ -1,0 +1,6 @@
+--TEST--
+Legal numeric entities in display text remain benign
+--INPUT--
+LAPTOP CASE 14&#39; and Foo&#39;s 80&#039;s product text
+--EXPECTED--
+0

@@ -1,0 +1,6 @@
+--TEST--
+Hexadecimal numeric entities form the same script tag
+--INPUT--
+&#x3c;script&#x3e;alert(1)&#x3c;/script&#x3e;
+--EXPECTED--
+1

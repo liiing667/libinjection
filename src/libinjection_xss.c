@@ -5,6 +5,8 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 typedef enum attribute {
     TYPE_NONE
@@ -78,7 +80,14 @@ static int html_decode_char_at(const char* src, size_t len, size_t* consumed)
         return '&';
     }
 
+    if (len < 3) {
+        return '&';
+    }
+
     if (*(src+2) == 'x' || *(src+2) == 'X') {
+        if (len < 4) {
+            return '&';
+        }
         ch = (unsigned char) (*(src+3));
         ch = gsHexDecodeMap[ch];
         if (ch == 256) {
@@ -411,7 +420,65 @@ static int is_black_url(const char* s, size_t len)
     return 0;
 }
 
-int libinjection_is_xss(const char* s, size_t len, int flags)
+static int has_numeric_entity(const char* s, size_t len)
+{
+    size_t i;
+
+    if (s == NULL || len < 3) {
+        return 0;
+    }
+
+    for (i = 0; i + 2 < len; ++i) {
+        if (s[i] == '&' && s[i + 1] == '#') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Decimal (&#60;) and hexadecimal (&#x3c;) references are alternate
+ * serializations of the same character.  Canonicalize ASCII references before
+ * parsing so equivalent payloads reach the same detector decision.
+ */
+static char* normalize_numeric_entities(const char* src, size_t len,
+                                       size_t* out_len)
+{
+    char* dst;
+    size_t src_pos = 0;
+    size_t dst_pos = 0;
+
+    *out_len = 0;
+    if (src == NULL || len == 0 || len > (size_t) -2) {
+        return NULL;
+    }
+
+    dst = (char*) malloc(len + 1);
+    if (dst == NULL) {
+        return NULL;
+    }
+
+    while (src_pos < len) {
+        size_t consumed = 0;
+        int decoded = html_decode_char_at(src + src_pos, len - src_pos,
+                                          &consumed);
+
+        if (consumed > 1 && consumed <= len - src_pos &&
+            src[src_pos] == '&' && src[src_pos + 1] == '#' &&
+            decoded >= 0 && decoded < 128) {
+            dst[dst_pos++] = (char) decoded;
+            src_pos += consumed;
+        } else {
+            dst[dst_pos++] = src[src_pos++];
+        }
+    }
+
+    dst[dst_pos] = '\0';
+    *out_len = dst_pos;
+    return dst;
+}
+
+static int libinjection_is_xss_raw(const char* s, size_t len, int flags)
 {
     h5_state_t h5;
     attribute_t attr = TYPE_NONE;
@@ -506,27 +573,64 @@ int libinjection_is_xss(const char* s, size_t len, int flags)
     return 0;
 }
 
+int libinjection_is_xss(const char* s, size_t len, int flags)
+{
+    char* normalized;
+    size_t normalized_len;
+    int result = libinjection_is_xss_raw(s, len, flags);
+
+    if (result || !has_numeric_entity(s, len)) {
+        return result;
+    }
+
+    normalized = normalize_numeric_entities(s, len, &normalized_len);
+    if (normalized == NULL) {
+        return result;
+    }
+
+    result = libinjection_is_xss_raw(normalized, normalized_len, flags);
+    free(normalized);
+    return result;
+}
 
 /*
  * wrapper
  */
 int libinjection_xss(const char* s, size_t len)
 {
-    if (libinjection_is_xss(s, len, DATA_STATE)) {
-        return 1;
-    }
-    if (libinjection_is_xss(s, len, VALUE_NO_QUOTE)) {
-        return 1;
-    }
-    if (libinjection_is_xss(s, len, VALUE_SINGLE_QUOTE)) {
-        return 1;
-    }
-    if (libinjection_is_xss(s, len, VALUE_DOUBLE_QUOTE)) {
-        return 1;
-    }
-    if (libinjection_is_xss(s, len, VALUE_BACK_QUOTE)) {
-        return 1;
+    static const int contexts[] = {
+        DATA_STATE,
+        VALUE_NO_QUOTE,
+        VALUE_SINGLE_QUOTE,
+        VALUE_DOUBLE_QUOTE,
+        VALUE_BACK_QUOTE
+    };
+    char* normalized = NULL;
+    size_t normalized_len = 0;
+    size_t i;
+
+    for (i = 0; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
+        if (libinjection_is_xss_raw(s, len, contexts[i])) {
+            return 1;
+        }
     }
 
+    if (!has_numeric_entity(s, len)) {
+        return 0;
+    }
+
+    normalized = normalize_numeric_entities(s, len, &normalized_len);
+    if (normalized == NULL) {
+        return 0;
+    }
+
+    for (i = 0; i < sizeof(contexts) / sizeof(contexts[0]); ++i) {
+        if (libinjection_is_xss_raw(normalized, normalized_len, contexts[i])) {
+            free(normalized);
+            return 1;
+        }
+    }
+
+    free(normalized);
     return 0;
 }

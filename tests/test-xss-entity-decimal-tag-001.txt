@@ -1,0 +1,6 @@
+--TEST--
+Decimal numeric entities form an equivalent script tag
+--INPUT--
+&#60;script&#62;alert(1)&#60;/script&#62;
+--EXPECTED--
+1
