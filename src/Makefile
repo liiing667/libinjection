@@ -30,7 +30,7 @@ OBJECTS=libinjection_sqli.o \
 	libinjection_xss.o
 
 SAMPLES=html5 sqli fptool
-TESTDRIVERS=reader testdriver testspeedxss testspeedsqli
+TESTDRIVERS=reader testdriver testchunkxss testspeedxss testspeedsqli
 
 all: ${SHAREDLIB} ${STATICLIB}
 #all: ${STATICLIB}
@@ -70,6 +70,7 @@ ${STATICLIB}: ${OBJECTS}
 	${AR} ${STATICLIB} ${OBJECTS}
 
 check: ${TESTDRIVERS}
+	./testchunkxss
 	@./test-driver.sh test-unit.sh
 	@./test-driver.sh test-samples-sqli-negative.sh
 	@./test-driver.sh test-samples-sqli-positive.sh
@@ -94,6 +95,13 @@ html5: html5_cli.c ${STATICLIB}
 
 testdriver: testdriver.c ${STATICLIB}
 	${CC} ${CFLAGS} -o testdriver testdriver.c -L. ${STATICLIB}
+
+testchunkxss: test_chunk_xss.c ${SOURCES}
+	${CC} ${CFLAGS} -std=c99 -o testchunkxss test_chunk_xss.c ${SOURCES}
+
+chunkcheck: testchunkxss
+	./testchunkxss
+.PHONY: chunkcheck
 
 testspeedsqli: test_speed_sqli.c ${STATICLIB}
 	${CC} ${CFLAGS} -o testspeedsqli test_speed_sqli.c -L. ${STATICLIB}

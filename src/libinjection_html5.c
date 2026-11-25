@@ -44,6 +44,7 @@ static int h5_state_before_attribute_value(h5_state_t* hs);
 static int h5_state_attribute_value_double_quote(h5_state_t* hs);
 static int h5_state_attribute_value_single_quote(h5_state_t* hs);
 static int h5_state_attribute_value_back_quote(h5_state_t* hs);
+static int h5_state_attribute_value_quote_resume(h5_state_t* hs);
 static int h5_state_attribute_value_no_quote(h5_state_t* hs);
 static int h5_state_after_attribute_value_quoted_state(h5_state_t* hs);
 static int h5_state_comment(h5_state_t* hs);
@@ -97,6 +98,12 @@ int libinjection_h5_next(h5_state_t* hs)
     return (*hs->state)(hs);
 }
 
+void libinjection_h5_attach(h5_state_t* hs, const char* s, size_t len)
+{
+    hs->s = s;
+    hs->len = len;
+}
+
 /**
  * Everything below here is private
  *
@@ -139,9 +146,23 @@ static int h5_skip_white(h5_state_t* hs)
 
 static int h5_state_eof(h5_state_t* hs)
 {
-    /* eliminate unused function argument warning */
-    (void)hs;
+    if (hs->resume_state != NULL && hs->len > hs->resume_len) {
+        ptr_html5_state resume = hs->resume_state;
+        hs->state = resume;
+        hs->pos = hs->resume_pos;
+        hs->resume_state = NULL;
+        return (*resume)(hs);
+    }
     return 0;
+}
+
+static void h5_state_pause(h5_state_t* hs, ptr_html5_state resume,
+                           size_t resume_pos)
+{
+    hs->state = h5_state_eof;
+    hs->resume_state = resume;
+    hs->resume_pos = resume_pos;
+    hs->resume_len = hs->len;
 }
 
 static int h5_state_data(h5_state_t* hs)
@@ -155,7 +176,7 @@ static int h5_state_data(h5_state_t* hs)
         hs->token_start = hs->s + hs->pos;
         hs->token_len = hs->len - hs->pos;
         hs->token_type = DATA_TEXT;
-        hs->state = h5_state_eof;
+        h5_state_pause(hs, h5_state_data, hs->pos);
         if (hs->token_len == 0) {
             return 0;
         }
@@ -252,7 +273,7 @@ static int h5_state_tag_name_close(h5_state_t* hs)
     if (hs->pos < hs->len) {
         hs->state = h5_state_data;
     } else {
-        hs->state = h5_state_eof;
+        h5_state_pause(hs, h5_state_data, hs->pos);
     }
 
     return 1;
@@ -311,7 +332,7 @@ static int h5_state_tag_name(h5_state_t* hs)
     hs->token_start = hs->s + hs->pos;
     hs->token_len = hs->len - hs->pos;
     hs->token_type = TAG_NAME_OPEN;
-    hs->state = h5_state_eof;
+    h5_state_pause(hs, h5_state_tag_name, hs->pos);
     return 1;
 }
 
@@ -391,7 +412,8 @@ static int h5_state_attribute_name(h5_state_t* hs)
     hs->token_start = hs->s + hs->pos;
     hs->token_len   = hs->len - hs->pos;
     hs->token_type  = ATTR_NAME;
-    hs->state = h5_state_eof;
+    h5_state_pause(hs, h5_state_attribute_name,
+                   (size_t)(hs->token_start - hs->s));
     hs->pos = hs->len;
     return 1;
 }
@@ -437,7 +459,7 @@ static int h5_state_before_attribute_value(h5_state_t* hs)
     c = h5_skip_white(hs);
 
     if (c == CHAR_EOF) {
-        hs->state = h5_state_eof;
+        h5_state_pause(hs, h5_state_before_attribute_value, hs->pos);
         return 0;
     }
 
@@ -454,18 +476,20 @@ static int h5_state_before_attribute_value(h5_state_t* hs)
 }
 
 
-static int h5_state_attribute_value_quote(h5_state_t* hs, char qchar)
+static int h5_state_attribute_value_quote_scan(h5_state_t* hs, char qchar,
+                                               int skip_quote)
 {
     const char* idx;
 
     TRACE();
+    hs->quote_char = qchar;
 
     /* skip initial quote in normal case.
      * don't do this "if (pos == 0)" since it means we have started
      * in a non-data state.  given an input of '><foo
      * we want to make 0-length attribute name
      */
-    if (hs->pos > 0) {
+    if (skip_quote && hs->pos > 0) {
         hs->pos += 1;
     }
 
@@ -475,7 +499,7 @@ static int h5_state_attribute_value_quote(h5_state_t* hs, char qchar)
         hs->token_start = hs->s + hs->pos;
         hs->token_len = hs->len - hs->pos;
         hs->token_type = ATTR_VALUE;
-        hs->state = h5_state_eof;
+        h5_state_pause(hs, h5_state_attribute_value_quote_resume, hs->pos);
     } else {
         hs->token_start = hs->s + hs->pos;
         hs->token_len = (size_t)(idx - hs->s) - hs->pos;
@@ -486,11 +510,21 @@ static int h5_state_attribute_value_quote(h5_state_t* hs, char qchar)
     return 1;
 }
 
+static int h5_state_attribute_value_quote(h5_state_t* hs, char qchar)
+{
+    return h5_state_attribute_value_quote_scan(hs, qchar, 1);
+}
+
+static int h5_state_attribute_value_quote_resume(h5_state_t* hs)
+{
+    return h5_state_attribute_value_quote_scan(hs, (char) hs->quote_char, 0);
+}
+
 static
 int h5_state_attribute_value_double_quote(h5_state_t* hs)
 {
     TRACE();
-    return h5_state_attribute_value_quote(hs, CHAR_DOUBLE);
+    return h5_state_attribute_value_quote_scan(hs, CHAR_DOUBLE, 1);
 }
 
 static
@@ -535,7 +569,7 @@ static int h5_state_attribute_value_no_quote(h5_state_t* hs)
     }
     TRACE();
     /* EOF */
-    hs->state = h5_state_eof;
+    h5_state_pause(hs, h5_state_attribute_value_no_quote, hs->pos);
     hs->token_start = hs->s + hs->pos;
     hs->token_len = hs->len - hs->pos;
     hs->token_type = ATTR_VALUE;
@@ -607,10 +641,11 @@ static int h5_state_bogus_comment(h5_state_t* hs)
     TRACE();
     idx = (const char*) memchr(hs->s + hs->pos, CHAR_GT, hs->len - hs->pos);
     if (idx == NULL) {
+        size_t resume_pos = hs->pos;
         hs->token_start = hs->s + hs->pos;
         hs->token_len = hs->len - hs->pos;
         hs->pos = hs->len;
-        hs->state = h5_state_eof;
+        h5_state_pause(hs, h5_state_bogus_comment, resume_pos);
     } else {
         hs->token_start = hs->s + hs->pos;
         hs->token_len = (size_t)(idx - hs->s) - hs->pos;
@@ -635,11 +670,12 @@ static int h5_state_bogus_comment2(h5_state_t* hs)
     while (1) {
         idx = (const char*) memchr(hs->s + pos, CHAR_PERCENT, hs->len - pos);
         if (idx == NULL || (idx + 1 >= hs->s + hs->len)) {
+            size_t resume_pos = hs->pos;
             hs->token_start = hs->s + hs->pos;
             hs->token_len = hs->len - hs->pos;
             hs->pos = hs->len;
             hs->token_type = TAG_COMMENT;
-            hs->state = h5_state_eof;
+            h5_state_pause(hs, h5_state_bogus_comment2, resume_pos);
             return 1;
         }
 
@@ -727,7 +763,7 @@ static int h5_state_comment(h5_state_t* hs)
 
         /* did not find anything or has less than 3 chars left */
         if (idx == NULL || idx > hs->s + hs->len - 3) {
-            hs->state = h5_state_eof;
+            h5_state_pause(hs, h5_state_comment, hs->pos);
             hs->token_start = hs->s + hs->pos;
             hs->token_len = hs->len - hs->pos;
             hs->token_type = TAG_COMMENT;
@@ -740,7 +776,7 @@ static int h5_state_comment(h5_state_t* hs)
             offset += 1;
         }
         if (idx + offset == end) {
-            hs->state = h5_state_eof;
+            h5_state_pause(hs, h5_state_comment, hs->pos);
             hs->token_start = hs->s + hs->pos;
             hs->token_len = hs->len - hs->pos;
             hs->token_type = TAG_COMMENT;
@@ -770,7 +806,7 @@ static int h5_state_comment(h5_state_t* hs)
 
         offset += 1;
         if (idx + offset == end) {
-            hs->state = h5_state_eof;
+            h5_state_pause(hs, h5_state_comment, hs->pos);
             hs->token_start = hs->s + hs->pos;
             hs->token_len = hs->len - hs->pos;
             hs->token_type = TAG_COMMENT;
@@ -807,7 +843,7 @@ static int h5_state_cdata(h5_state_t* hs)
 
         /* did not find anything or has less than 3 chars left */
         if (idx == NULL || idx > hs->s + hs->len - 3) {
-            hs->state = h5_state_eof;
+            h5_state_pause(hs, h5_state_cdata, hs->pos);
             hs->token_start = hs->s + hs->pos;
             hs->token_len = hs->len - hs->pos;
             hs->token_type = DATA_TEXT;
@@ -839,7 +875,7 @@ static int h5_state_doctype(h5_state_t* hs)
 
     idx = (const char*) memchr(hs->s + hs->pos, CHAR_GT, hs->len - hs->pos);
     if (idx == NULL) {
-        hs->state = h5_state_eof;
+        h5_state_pause(hs, h5_state_doctype, hs->pos);
         hs->token_len = hs->len - hs->pos;
     } else {
         hs->state = h5_state_data;

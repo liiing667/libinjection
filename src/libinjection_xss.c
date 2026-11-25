@@ -5,6 +5,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 typedef enum attribute {
     TYPE_NONE
@@ -411,13 +412,10 @@ static int is_black_url(const char* s, size_t len)
     return 0;
 }
 
-int libinjection_is_xss(const char* s, size_t len, int flags)
+static int xss_token_is_attack(h5_state_t h5, attribute_t* attr_storage)
 {
-    h5_state_t h5;
-    attribute_t attr = TYPE_NONE;
+    attribute_t attr = *attr_storage;
 
-    libinjection_h5_init(&h5, s, len, (enum html5_flags) flags);
-    while (libinjection_h5_next(&h5)) {
         if (h5.token_type != ATTR_VALUE) {
             attr = TYPE_NONE;
         }
@@ -502,6 +500,21 @@ int libinjection_is_xss(const char* s, size_t len, int flags)
                 }
             }
         }
+
+    *attr_storage = attr;
+    return 0;
+}
+
+int libinjection_is_xss(const char* s, size_t len, int flags)
+{
+    h5_state_t h5;
+    attribute_t attr = TYPE_NONE;
+
+    libinjection_h5_init(&h5, s, len, (enum html5_flags) flags);
+    while (libinjection_h5_next(&h5)) {
+        if (xss_token_is_attack(h5, &attr)) {
+            return 1;
+        }
     }
     return 0;
 }
@@ -529,4 +542,64 @@ int libinjection_xss(const char* s, size_t len)
     }
 
     return 0;
+}
+
+void libinjection_xss_stream_init(libinjection_xss_stream_t* stream)
+{
+    memset(stream, 0, sizeof(*stream));
+}
+
+int libinjection_xss_stream_feed(libinjection_xss_stream_t* stream,
+                                 const char* chunk, size_t chunk_len)
+{
+    size_t needed;
+    size_t new_cap;
+    char* new_buffer;
+
+    if (chunk_len != 0) {
+        needed = stream->len + chunk_len;
+        if (needed < stream->len) {
+            return -1;
+        }
+
+        new_cap = stream->cap == 0 ? 64 : stream->cap;
+        while (new_cap < needed) {
+            if (new_cap > (size_t) -1 / 2) {
+                return -1;
+            }
+            new_cap *= 2;
+        }
+
+        new_buffer = (char*) realloc(stream->buffer, new_cap);
+        if (new_buffer == NULL) {
+            return -1;
+        }
+
+        stream->buffer = new_buffer;
+        stream->cap = new_cap;
+        memcpy(stream->buffer + stream->len, chunk, chunk_len);
+        stream->len = needed;
+    }
+
+    /*
+     * Re-run the same public entry point used by a cold process.  This is
+     * deliberately authoritative: a token at a read boundary can still grow
+     * into a different tag/attribute name when the next chunk arrives.
+     */
+    stream->verdict = libinjection_xss(stream->buffer != NULL ?
+                                       stream->buffer : "", stream->len);
+    return stream->verdict;
+}
+
+int libinjection_xss_stream_result(const libinjection_xss_stream_t* stream)
+{
+    return stream->verdict;
+}
+
+void libinjection_xss_stream_destroy(libinjection_xss_stream_t* stream)
+{
+    if (stream != NULL) {
+        free(stream->buffer);
+        memset(stream, 0, sizeof(*stream));
+    }
 }
