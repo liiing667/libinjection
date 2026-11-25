@@ -1,0 +1,12 @@
+--TEST--
+degenerate "</>" must not leak close state into next tag
+--INPUT--
+</><script>alert(1)</script>
+--EXPECTED--
+DATA_TEXT,1,>
+TAG_NAME_OPEN,6,script
+TAG_NAME_CLOSE,1,>
+DATA_TEXT,8,alert(1)
+TAG_CLOSE,6,script
+
+

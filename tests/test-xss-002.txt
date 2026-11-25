@@ -1,0 +1,7 @@
+--TEST--
+script hidden behind svg end tag with quoted attribute
+--INPUT--
+</svg x="1"><script>alert(1)</script>
+--EXPECTED--
+1
+

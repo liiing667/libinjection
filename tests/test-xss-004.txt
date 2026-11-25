@@ -1,0 +1,7 @@
+--TEST--
+legitimate mathml content is not xss
+--INPUT--
+<math><mi>x</mi><mn>2</mn></math>
+--EXPECTED--
+0
+

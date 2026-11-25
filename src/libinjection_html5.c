@@ -230,6 +230,10 @@ static int h5_state_end_tag_open(h5_state_t* hs)
     }
     ch = hs->s[hs->pos];
     if (ch == CHAR_GT) {
+        /* degenerate case "</>": not a tag at all, make sure the
+         * close state does not leak into the next tag
+         */
+        hs->is_close = 0;
         return h5_state_data(hs);
     } else if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
         return h5_state_tag_name(hs);
@@ -281,6 +285,7 @@ static int h5_state_tag_name(h5_state_t* hs)
             hs->token_type = TAG_NAME_OPEN;
             hs->pos = pos + 1;
             hs->state = h5_state_before_attribute_name;
+            hs->is_close = 0;
             return 1;
         } else if (ch == CHAR_SLASH) {
             hs->token_start = hs->s + hs->pos;
@@ -288,6 +293,7 @@ static int h5_state_tag_name(h5_state_t* hs)
             hs->token_type = TAG_NAME_OPEN;
             hs->pos = pos + 1;
             hs->state = h5_state_self_closing_start_tag;
+            hs->is_close = 0;
             return 1;
         } else if (ch == CHAR_GT) {
             hs->token_start = hs->s + hs->pos;
@@ -312,6 +318,7 @@ static int h5_state_tag_name(h5_state_t* hs)
     hs->token_len = hs->len - hs->pos;
     hs->token_type = TAG_NAME_OPEN;
     hs->state = h5_state_eof;
+    hs->is_close = 0;
     return 1;
 }
 
