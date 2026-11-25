@@ -42,6 +42,12 @@ typedef struct h5_state {
     const char* token_start;
     size_t token_len;
     enum html5_type token_type;
+
+    /*
+     * zero when the input contains a NUL byte or an invalid
+     * UTF-8 lead sequence
+     */
+    int input_valid;
 } h5_state_t;
 
 

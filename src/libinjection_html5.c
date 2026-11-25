@@ -1,5 +1,6 @@
 #include "libinjection_html5.h"
 
+#include "libinjection_bytes.h"
 #include <string.h>
 #include <assert.h>
 
@@ -68,6 +69,7 @@ void libinjection_h5_init(h5_state_t* hs, const char* s, size_t len, enum html5_
     memset(hs, 0, sizeof(h5_state_t));
     hs->s = s;
     hs->len = len;
+    hs->input_valid = libinjection_bytes_are_safe(s, len);
 
     switch (flags) {
     case DATA_STATE:
@@ -94,6 +96,10 @@ void libinjection_h5_init(h5_state_t* hs, const char* s, size_t len, enum html5_
 int libinjection_h5_next(h5_state_t* hs)
 {
     assert(hs->state != NULL);
+    if (!hs->input_valid) {
+        hs->state = h5_state_eof;
+        return 0;
+    }
     return (*hs->state)(hs);
 }
 

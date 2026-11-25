@@ -19,7 +19,8 @@ STATICLIB=lib${LIBNAME}.${STATICLIB_SUFFIX}
 SHAREDLIB_SUFFIX=so
 SHAREDLIB=lib${LIBNAME}.${SHAREDLIB_SUFFIX}
 
-HEADERS=libinjection.h libinjection_sqli.h libinjection_sqli_data.h libinjection_html5.h libinjection_xss.h
+HEADERS=libinjection.h libinjection_bytes.h libinjection_sqli.h \
+	libinjection_sqli_data.h libinjection_html5.h libinjection_xss.h
 
 SOURCES=libinjection_sqli.c \
 	libinjection_html5.c \
@@ -30,7 +31,7 @@ OBJECTS=libinjection_sqli.o \
 	libinjection_xss.o
 
 SAMPLES=html5 sqli fptool
-TESTDRIVERS=reader testdriver testspeedxss testspeedsqli
+TESTDRIVERS=reader testdriver testspeedxss testspeedsqli testinputsafety
 
 all: ${SHAREDLIB} ${STATICLIB}
 #all: ${STATICLIB}
@@ -53,13 +54,13 @@ sqlparse_data.json: sqlparse_map.py fingerprints
 libinjection_sqli_data.h: sqlparse2c.py sqlparse_data.json
 	./sqlparse2c.py < sqlparse_data.json > libinjection_sqli_data.h
 
-libinjection_sqli.o: libinjection.h libinjection_sqli.c libinjection_sqli.h libinjection_sqli_data.h
+libinjection_sqli.o: libinjection.h libinjection_bytes.h libinjection_sqli.c libinjection_sqli.h libinjection_sqli_data.h
 	${CC} ${CFLAGS} -c -o libinjection_sqli.o libinjection_sqli.c
 
-libinjection_xss.o: libinjection.h libinjection_xss.c libinjection_xss.h libinjection_html5.h
+libinjection_xss.o: libinjection.h libinjection_bytes.h libinjection_xss.c libinjection_xss.h libinjection_html5.h
 	${CC} ${CFLAGS} -c -o libinjection_xss.o libinjection_xss.c
 
-libinjection_html5.o: libinjection.h libinjection_html5.c libinjection_html5.h
+libinjection_html5.o: libinjection.h libinjection_bytes.h libinjection_html5.c libinjection_html5.h
 	${CC} ${CFLAGS} -c -o libinjection_html5.o libinjection_html5.c
 
 ${SHAREDLIB}: ${OBJECTS}
@@ -71,6 +72,7 @@ ${STATICLIB}: ${OBJECTS}
 
 check: ${TESTDRIVERS}
 	@./test-driver.sh test-unit.sh
+	@./test-driver.sh test-input-safety.sh
 	@./test-driver.sh test-samples-sqli-negative.sh
 	@./test-driver.sh test-samples-sqli-positive.sh
 	@./test-driver.sh test-samples-xss-positive.sh
@@ -94,6 +96,9 @@ html5: html5_cli.c ${STATICLIB}
 
 testdriver: testdriver.c ${STATICLIB}
 	${CC} ${CFLAGS} -o testdriver testdriver.c -L. ${STATICLIB}
+
+testinputsafety: test_input_safety.c ${STATICLIB}
+	${CC} ${CFLAGS} -o testinputsafety test_input_safety.c -L. ${STATICLIB}
 
 testspeedsqli: test_speed_sqli.c ${STATICLIB}
 	${CC} ${CFLAGS} -o testspeedsqli test_speed_sqli.c -L. ${STATICLIB}

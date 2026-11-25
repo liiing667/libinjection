@@ -2,6 +2,7 @@
 #include "libinjection.h"
 #include "libinjection_xss.h"
 #include "libinjection_html5.h"
+#include "libinjection_bytes.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -243,7 +244,8 @@ static int cstrcasecmp_with_null(const char *a, const char *b, size_t n)
  * Does an HTML encoded  binary string (const char*, length) start with
  * a all uppercase c-string (null terminated), case insensitive!
  *
- * also ignore any embedded nulls in the HTML string!
+ * Historically embedded nulls in the HTML string were ignored.
+ * Public entry points now reject such input before tokenization.
  *
  * return 1 if match / starts with
  * return 0 if not
@@ -512,6 +514,10 @@ int libinjection_is_xss(const char* s, size_t len, int flags)
  */
 int libinjection_xss(const char* s, size_t len)
 {
+    if (!libinjection_bytes_are_safe(s, len)) {
+        return 0;
+    }
+
     if (libinjection_is_xss(s, len, DATA_STATE)) {
         return 1;
     }

@@ -17,6 +17,7 @@
 #include "libinjection.h"
 #include "libinjection_sqli.h"
 #include "libinjection_sqli_data.h"
+#include "libinjection_bytes.h"
 
 #define LIBINJECTION_VERSION "3.9.2"
 
@@ -1210,7 +1211,7 @@ int libinjection_sqli_tokenize(struct libinjection_sqli_state * sf)
     const char *s = sf->s;
     const size_t slen = sf->slen;
 
-    if (slen == 0) {
+    if (slen == 0 || !sf->input_valid) {
         return FALSE;
     }
 
@@ -1269,6 +1270,7 @@ void libinjection_sqli_init(struct libinjection_sqli_state * sf, const char *s, 
     sf->userdata = 0;
     sf->flags    = flags;
     sf->current  = &(sf->tokenvec[0]);
+    sf->input_valid = libinjection_bytes_are_safe(s, len);
 }
 
 void libinjection_sqli_reset(struct libinjection_sqli_state * sf, int flags)
@@ -1380,6 +1382,10 @@ int libinjection_sqli_fold(struct libinjection_sqli_state * sf)
     size_t left =  0;
 
     int more = 1;
+
+    if (!sf->input_valid) {
+        return 0;
+    }
 
     st_clear(&last_comment);
 
@@ -1904,6 +1910,10 @@ const char* libinjection_sqli_fingerprint(struct libinjection_sqli_state * sql_s
     int tlen = 0;
 
     libinjection_sqli_reset(sql_state, flags);
+    if (!sql_state->input_valid) {
+        sql_state->fingerprint[0] = CHAR_NULL;
+        return sql_state->fingerprint;
+    }
 
     tlen = libinjection_sqli_fold(sql_state);
 
@@ -1959,6 +1969,9 @@ const char* libinjection_sqli_fingerprint(struct libinjection_sqli_state * sql_s
 
 int libinjection_sqli_check_fingerprint(struct libinjection_sqli_state* sql_state)
 {
+    if (!sql_state->input_valid) {
+        return FALSE;
+    }
     return libinjection_sqli_blacklist(sql_state) &&
         libinjection_sqli_not_whitelist(sql_state);
 }
@@ -1984,6 +1997,11 @@ int libinjection_sqli_blacklist(struct libinjection_sqli_state* sql_state)
     size_t i;
     size_t len = strlen(sql_state->fingerprint);
     int patmatch;
+
+    if (!sql_state->input_valid) {
+        sql_state->reason = __LINE__;
+        return FALSE;
+    }
 
     if (len < 1) {
         sql_state->reason = __LINE__;
@@ -2035,6 +2053,11 @@ int libinjection_sqli_not_whitelist(struct libinjection_sqli_state* sql_state)
      */
     char ch;
     size_t tlen = strlen(sql_state->fingerprint);
+
+    if (!sql_state->input_valid) {
+        sql_state->reason = __LINE__;
+        return FALSE;
+    }
 
     if (tlen > 1 && sql_state->fingerprint[tlen-1] == TYPE_COMMENT) {
         /*
@@ -2250,7 +2273,8 @@ int libinjection_is_sqli(struct libinjection_sqli_state * sql_state)
     /*
      * no input? not SQLi
      */
-    if (slen == 0) {
+    if (slen == 0 || !sql_state->input_valid) {
+        sql_state->fingerprint[0] = CHAR_NULL;
         return FALSE;
     }
 

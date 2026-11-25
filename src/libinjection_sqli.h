@@ -170,6 +170,12 @@ struct libinjection_sqli_state {
      */
     int stats_tokens;
 
+    /*
+     * zero when the input contains a NUL byte or an invalid
+     * UTF-8 lead sequence
+     */
+    int input_valid;
+
 };
 
 typedef struct libinjection_sqli_state sfilter;

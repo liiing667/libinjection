@@ -42,7 +42,8 @@ const char* libinjection_version(void);
  * Simple API for SQLi detection - returns a SQLi fingerprint or NULL
  * is benign input
  *
- * \param[in] s  input string, may contain nulls, does not need to be null-terminated
+ * \param[in] s  input string, does not need to be null-terminated.
+ *               NUL bytes and invalid UTF-8 lead sequences fail closed.
  * \param[in] slen input string length
  * \param[out] fingerprint buffer of 8+ characters.  c-string,
  * \return 1 if SQLi, 0 if benign.  fingerprint will be set or set to empty string.
@@ -53,7 +54,8 @@ int libinjection_sqli(const char* s, size_t slen, char fingerprint[]);
  *
  * NOT DONE.
  *
- * \param[in] s  input string, may contain nulls, does not need to be null-terminated
+ * \param[in] s  input string, does not need to be null-terminated.
+ *               NUL bytes and invalid UTF-8 lead sequences fail closed.
  * \param[in] slen input string length
  * \return 1 if XSS found, 0 if benign
  *
