@@ -22,6 +22,42 @@ static int cstrcasecmp_with_null(const char *a, const char *b, size_t n);
 static int html_decode_char_at(const char* src, size_t len, size_t* consumed);
 static int htmlencode_startswith(const char* prefix, const char *src, size_t n);
 
+/*
+ * IE (and some legacy engines) treat a back-tick "`" as an attribute
+ * value quote even though it is not valid HTML 5.  Under the HTML 5 data
+ * state a back-tick embedded in an unquoted attribute value does not end
+ * the value: the tokenizer keeps consuming the following bytes as part of
+ * the same ATTR_VALUE.  IE, however, switches tag context at the back-tick,
+ * so a black attribute (an on* handler, a javascript: URL, ...) can hide
+ * past it.
+ *
+ * The dedicated VALUE_BACK_QUOTE parse already models that IE behavior, but
+ * it only runs when the whole input is assumed to start inside a back-tick
+ * quoted value.  When the input starts in the normal data state the boundary
+ * seen by the tokenizer (one long value) differs from the boundary IE acts
+ * on (a context switch at "`"), so the payload is missed.
+ *
+ * Re-parse the value beginning at the embedded back-tick using the
+ * back-quote state so the two paths reach a single, reviewable verdict.
+ * Standard single/double quotes and plain back-tick text never reach here
+ * (they are not part of an ATTR_VALUE token) and are therefore unchanged.
+ */
+static int xss_value_switches_on_backtick(const char* value, size_t len)
+{
+    const char* tick;
+
+    tick = (const char*) memchr(value, '`', len);
+    if (tick == NULL) {
+        return 0;
+    }
+
+    /* begin AT the back-tick: the back-quote state skips the opening
+     * quote itself, matching h5_state_attribute_value_quote()
+     */
+    return libinjection_is_xss(tick, len - (size_t)(tick - value),
+                                VALUE_BACK_QUOTE);
+}
+
 
 typedef struct stringtype {
     const char* name;
@@ -445,6 +481,16 @@ int libinjection_is_xss(const char* s, size_t len, int flags)
               return 1;
               }
             */
+
+            /*
+             * A back-tick inside this value switches tag context under
+             * IE parsing even though the HTML 5 tokenizer keeps it inside
+             * one ATTR_VALUE.  Re-check from the back-tick so a black
+             * attribute hiding beyond it cannot slip past.
+             */
+            if (xss_value_switches_on_backtick(h5.token_start, h5.token_len)) {
+                return 1;
+            }
 
             switch (attr) {
             case TYPE_NONE:

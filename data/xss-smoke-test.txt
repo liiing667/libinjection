@@ -84,3 +84,9 @@ x" onerror=alert(1);>
 
 # really a raw embedded null
 <a href="j&#0;avascript:alert(1)">
+
+# back-tick in an unquoted attribute value switches tag context under
+# IE parsing, so the on* handler hiding past it must still be detected.
+# Regression: DATA_STATE tokenizer and back-quote parser disagreed on
+# where this attribute value ended.
+<a href=x`onmouseover=alert(1)>
