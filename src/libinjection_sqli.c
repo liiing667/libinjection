@@ -196,6 +196,95 @@ static int char_is_white(char ch) {
     return strchr(" \t\n\v\f\r\240\000", ch) != NULL;
 }
 
+/**
+ * Scan for an executable MySQL versioned comment, the "slash star bang"
+ * form.
+ *
+ * This is deliberately a lexical scan instead of using the tokenizer:
+ * the tokenizer can miss a versioned comment when it is hidden inside an
+ * ANSI-only end-of-line comment ("--x") or when it appears after the
+ * five-token folding limit.  Quoted strings, ordinary C comments,
+ * "dash dash white" comments and (in MySQL) hash comments are skipped
+ * since text inside them is not executed as SQL.
+ *
+ * The "mysql" flag selects MySQL-only comment syntax.
+ */
+static int has_mysql_versioned_comment(const char *s, size_t len, int mysql)
+{
+    size_t i = 0;
+
+    /* a versioned comment always needs a '!' */
+    if (len == 0 || memchr(s, '!', len) == NULL) {
+        return FALSE;
+    }
+
+    while (i < len) {
+        const char ch = s[i];
+
+        if (ch == CHAR_SINGLE || ch == CHAR_DOUBLE || ch == CHAR_TICK) {
+            const char delim = ch;
+            i += 1;
+            while (i < len) {
+                if (s[i] == '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (s[i] == delim) {
+                    if (i + 1 < len && s[i + 1] == delim) {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+        } else if (ch == '/' && i + 1 < len && s[i + 1] == '*') {
+            if (i + 2 < len && s[i + 2] == '!') {
+                return TRUE;
+            }
+            i += 2;
+            while (i < len) {
+                if (s[i] == '/' && i + 1 < len && s[i + 1] == '*') {
+                    if (i + 2 < len && s[i + 2] == '!') {
+                        return TRUE;
+                    }
+                    i += 2;
+                    continue;
+                }
+                if (s[i] == '*' && i + 1 < len && s[i + 1] == '/') {
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+        } else if (ch == '-' && i + 1 < len && s[i + 1] == '-') {
+            if (i + 2 >= len || char_is_white(s[i + 2])) {
+                /* both ANSI and MySQL treat this as a comment */
+                i += 2;
+                while (i < len && s[i] != '\n') {
+                    i += 1;
+                }
+            } else {
+                /*
+                 * MySQL does not treat '--x' as a comment, so keep
+                 * scanning the rest of the line.
+                 */
+                i += 1;
+            }
+        } else if (mysql && ch == '#') {
+            i += 1;
+            while (i < len && s[i] != '\n') {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    return FALSE;
+}
+
 /* DANGER DANGER
  * This is -very specialized function-
  *
@@ -436,6 +525,19 @@ static size_t parse_dash(struct libinjection_sqli_state * sf)
         /* --[not-white] not-white case:
          *
          */
+        size_t end = pos;
+        while (end < slen && cs[end] != '\n') {
+            end += 1;
+        }
+        if (has_mysql_versioned_comment(cs + pos, end - pos, 0)) {
+            /*
+             * MySQL does not treat '--x' as a comment, so a versioned
+             * comment later on the line would be executed.  Parse this
+             * dash as an operator instead of hiding the rest of the line.
+             */
+            st_assign_char(sf->current, TYPE_OPERATOR, pos, 1, '-');
+            return pos + 1;
+        }
         sf->stats_comment_ddx += 1;
         return parse_eol_comment(sf);
     } else {
@@ -1941,7 +2043,9 @@ const char* libinjection_sqli_fingerprint(struct libinjection_sqli_state * sql_s
      * or other syntax that isn't consistent.
      * Should be very rare false positive
      */
-    if (strchr(sql_state->fingerprint, TYPE_EVIL)) {
+    if (strchr(sql_state->fingerprint, TYPE_EVIL) ||
+        has_mysql_versioned_comment(sql_state->s, sql_state->slen,
+                                    (sql_state->flags & FLAG_SQL_MYSQL) != 0)) {
         /*  needed for SWIG */
         memset((void*)sql_state->fingerprint, 0, LIBINJECTION_SQLI_MAX_TOKENS + 1);
         memset((void*)sql_state->tokenvec[0].val, 0, LIBINJECTION_SQLI_TOKEN_SIZE);
