@@ -30,7 +30,7 @@ OBJECTS=libinjection_sqli.o \
 	libinjection_xss.o
 
 SAMPLES=html5 sqli fptool
-TESTDRIVERS=reader testdriver testspeedxss testspeedsqli
+TESTDRIVERS=reader testdriver teststateisolation testspeedxss testspeedsqli
 
 all: ${SHAREDLIB} ${STATICLIB}
 #all: ${STATICLIB}
@@ -94,6 +94,9 @@ html5: html5_cli.c ${STATICLIB}
 
 testdriver: testdriver.c ${STATICLIB}
 	${CC} ${CFLAGS} -o testdriver testdriver.c -L. ${STATICLIB}
+
+teststateisolation: test_state_isolation.c ${STATICLIB}
+	${CC} ${CFLAGS} -o teststateisolation test_state_isolation.c -L. ${STATICLIB}
 
 testspeedsqli: test_speed_sqli.c ${STATICLIB}
 	${CC} ${CFLAGS} -o testspeedsqli test_speed_sqli.c -L. ${STATICLIB}

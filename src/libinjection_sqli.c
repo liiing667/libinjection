@@ -1206,7 +1206,7 @@ int libinjection_sqli_tokenize(struct libinjection_sqli_state * sf)
 {
     pt2Function fnptr;
     size_t *pos = &sf->pos;
-    stoken_t *current = sf->current;
+    stoken_t *current;
     const char *s = sf->s;
     const size_t slen = sf->slen;
 
@@ -1214,6 +1214,17 @@ int libinjection_sqli_tokenize(struct libinjection_sqli_state * sf)
         return FALSE;
     }
 
+    /*
+     * A detection always starts writing into tokenvec[0].  Re-point
+     * here instead of trusting a stale sf->current left over from a
+     * previous tokenize/fold run so tokens can never land in the wrong
+     * slot when the state is reused.
+     */
+    if (sf->current == NULL || sf->pos == 0) {
+        sf->current = &(sf->tokenvec[0]);
+    }
+
+    current = sf->current;
     st_clear(current);
     sf->current = current;
 
@@ -2251,6 +2262,12 @@ int libinjection_is_sqli(struct libinjection_sqli_state * sql_state)
      * no input? not SQLi
      */
     if (slen == 0) {
+        /*
+         * Make sure nothing from a previous detection (fingerprint,
+         * folded tokens or comment stats) is visible to callers that
+         * reuse this state across requests.
+         */
+        libinjection_sqli_reset(sql_state, sql_state->flags);
         return FALSE;
     }
 

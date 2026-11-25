@@ -181,6 +181,7 @@ static int h5_state_tag_open(h5_state_t* hs)
 
     TRACE();
     if (hs->pos >= hs->len) {
+        hs->state = h5_state_eof;
         return 0;
     }
     ch = hs->s[hs->pos];
@@ -226,6 +227,7 @@ static int h5_state_end_tag_open(h5_state_t* hs)
     TRACE();
 
     if (hs->pos >= hs->len) {
+        hs->state = h5_state_eof;
         return 0;
     }
     ch = hs->s[hs->pos];
@@ -326,6 +328,7 @@ static int h5_state_before_attribute_name(h5_state_t* hs)
     ch = h5_skip_white(hs);
     switch (ch) {
     case CHAR_EOF: {
+        hs->state = h5_state_eof;
         return 0;
     }
     case CHAR_SLASH: {
@@ -407,6 +410,7 @@ static int h5_state_after_attribute_name(h5_state_t* hs)
     c = h5_skip_white(hs);
     switch (c) {
     case CHAR_EOF: {
+        hs->state = h5_state_eof;
         return 0;
     }
     case CHAR_SLASH: {
@@ -551,6 +555,7 @@ static int h5_state_after_attribute_value_quoted_state(h5_state_t* hs)
 
     TRACE();
     if (hs->pos >= hs->len) {
+        hs->state = h5_state_eof;
         return 0;
     }
     ch = hs->s[hs->pos];
@@ -581,6 +586,7 @@ static int h5_state_self_closing_start_tag(h5_state_t* hs)
 
     TRACE();
     if (hs->pos >= hs->len) {
+        hs->state = h5_state_eof;
         return 0;
     }
     ch = hs->s[hs->pos];
