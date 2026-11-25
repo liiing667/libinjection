@@ -20,6 +20,13 @@
 
 #define LIBINJECTION_VERSION "3.9.2"
 
+/*
+ * Internal detection pass: parse ordinary string literals using strict
+ * SQL semantics where a backslash is a literal character.  The regular
+ * parser keeps its historical escape handling.
+ */
+#define FLAG_SQL_NO_BACKSLASH_ESCAPES (1 << 6)
+
 #define LIBINJECTION_SQLI_TOKEN_SIZE  sizeof(((stoken_t*)(0))->val)
 #define LIBINJECTION_SQLI_MAX_TOKENS  5
 
@@ -631,7 +638,8 @@ static size_t is_double_delim_escaped(const char* cur,  const char* end)
  *
  */
 static size_t parse_string_core(const char *cs, const size_t len, size_t pos,
-                                stoken_t * st, char delim, size_t offset)
+                                stoken_t * st, char delim, size_t offset,
+                                int backslash_escapes)
 {
     /*
      * offset is to skip the perhaps first quote char
@@ -664,7 +672,8 @@ static size_t parse_string_core(const char *cs, const size_t len, size_t pos,
             st_assign(st, TYPE_STRING, pos + offset, len - pos - offset, cs + pos + offset);
             st->str_close = CHAR_NULL;
             return len;
-        } else if ( is_backslash_escaped(qpos - 1, cs + pos + offset)) {
+        } else if (backslash_escapes &&
+                   is_backslash_escaped(qpos - 1, cs + pos + offset)) {
             /* keep going, move ahead one character */
             qpos =
                 (const char *) memchr((const void *) (qpos + 1), delim,
@@ -698,7 +707,8 @@ static size_t parse_string(struct libinjection_sqli_state * sf)
     /*
      * assert cs[pos] == single or double quote
      */
-    return parse_string_core(cs, slen, pos, sf->current, cs[pos], 1);
+    return parse_string_core(cs, slen, pos, sf->current, cs[pos], 1,
+                             !(sf->flags & FLAG_SQL_NO_BACKSLASH_ESCAPES));
 }
 
 /**
@@ -715,7 +725,7 @@ static size_t parse_estring(struct libinjection_sqli_state * sf)
     if (pos + 2 >= slen || cs[pos+1] != CHAR_SINGLE) {
         return parse_word(sf);
     }
-    return parse_string_core(cs, slen, pos, sf->current, CHAR_SINGLE, 2);
+    return parse_string_core(cs, slen, pos, sf->current, CHAR_SINGLE, 2, 1);
 }
 
 static size_t parse_ustring(struct libinjection_sqli_state * sf)
@@ -936,7 +946,8 @@ static size_t parse_word(struct libinjection_sqli_state * sf)
  */
 static size_t parse_tick(struct libinjection_sqli_state* sf)
 {
-    size_t pos =  parse_string_core(sf->s, sf->slen, sf->pos, sf->current, CHAR_TICK, 1);
+    size_t pos =  parse_string_core(sf->s, sf->slen, sf->pos, sf->current,
+                                    CHAR_TICK, 1, 1);
 
     /* we could check to see if start and end of
      * of string are both "`", i.e. make sure we have
@@ -1223,7 +1234,8 @@ int libinjection_sqli_tokenize(struct libinjection_sqli_state * sf)
      *  then pretend the input starts with a quote
      */
     if (*pos == 0 && (sf->flags & (FLAG_QUOTE_SINGLE | FLAG_QUOTE_DOUBLE))) {
-        *pos = parse_string_core(s, slen, 0, current, flag2delim(sf->flags), 0);
+        *pos = parse_string_core(s, slen, 0, current, flag2delim(sf->flags), 0,
+                                 !(sf->flags & FLAG_SQL_NO_BACKSLASH_ESCAPES));
         sf->stats_tokens += 1;
         return TRUE;
     }
@@ -2287,6 +2299,23 @@ int libinjection_is_sqli(struct libinjection_sqli_state * sql_state)
             libinjection_sqli_fingerprint(sql_state, FLAG_QUOTE_SINGLE | FLAG_SQL_MYSQL);
             if (sql_state->lookup(sql_state, LOOKUP_FINGERPRINT,
                                   sql_state->fingerprint, strlen(sql_state->fingerprint))) {
+                return TRUE;
+            }
+        }
+
+        /*
+         * The ANSI and MySQL string parsers disagree on whether a
+         * backslash protects the following quote.  When a backslash is
+         * present, also evaluate the strict ANSI interpretation so the
+         * detection result does not depend on which dialect pass ran last.
+         */
+        if (memchr(s, '\\', slen)) {
+            int strict_ansi_flags = FLAG_QUOTE_SINGLE | FLAG_SQL_ANSI |
+                                    FLAG_SQL_NO_BACKSLASH_ESCAPES;
+            libinjection_sqli_fingerprint(sql_state, strict_ansi_flags);
+            if (sql_state->lookup(sql_state, LOOKUP_FINGERPRINT,
+                                  sql_state->fingerprint,
+                                  strlen(sql_state->fingerprint))) {
                 return TRUE;
             }
         }
